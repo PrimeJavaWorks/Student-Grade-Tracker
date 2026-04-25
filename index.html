@@ -128,7 +128,6 @@
         margin-bottom: 20px;
       }
 
-      /* toolbar */
       .toolbar {
         display: flex;
         gap: 8px;
@@ -184,7 +183,6 @@
         cursor: pointer;
       }
 
-      /* roster table */
       table {
         width: 100%;
         border-collapse: collapse;
@@ -230,7 +228,6 @@
         transition: 0.4s;
       }
 
-      /* standing chips */
       .chip {
         font-size: 9px;
         font-weight: 700;
@@ -267,7 +264,6 @@
         background: rgba(248, 81, 73, 0.06);
       }
 
-      /* detail panel */
       .detail {
         background: var(--bg);
         border: 1px solid var(--br);
@@ -341,7 +337,6 @@
         border-radius: 2px;
       }
 
-      /* add-grade panel */
       .grade-form {
         display: flex;
         gap: 8px;
@@ -352,7 +347,6 @@
         border-top: 1px solid var(--br);
       }
 
-      /* stats row */
       .stats-row {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
@@ -378,7 +372,6 @@
         text-transform: uppercase;
       }
 
-      /* run it */
       pre.run {
         background: var(--bg);
         border: 1px solid var(--br);
@@ -406,15 +399,82 @@
         background: var(--br);
         border-radius: 2px;
       }
+      .db-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 16px;
+        font-size: 11px;
+        color: var(--txd);
+      }
+      .db-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--mu);
+        flex-shrink: 0;
+        transition: 0.3s;
+      }
+      .db-dot.ok {
+        background: var(--g);
+        box-shadow: 0 0 6px var(--gd);
+      }
+      .db-dot.err {
+        background: var(--rd);
+      }
+      .db-dot.busy {
+        background: var(--am);
+        animation: pulse 0.8s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
+      }
+      #importFile {
+        display: none;
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
+      <nav><a href="../../index.html">← All Projects</a></nav>
+      <div class="badges">
+        <span class="badge bj">Java</span>
+        <span class="badge bb">Beginner</span>
+        <span class="badge bo">OOP</span>
+      </div>
       <h1>Student Grade Tracker</h1>
       <p class="sub">
         Weighted GPA · letter grades · class ranking · per-subject stats
       </p>
 
+      <!-- db status -->
+      <div class="db-bar">
+        <div class="db-dot" id="dbDot"></div>
+        <span id="dbStatus">connecting to IndexedDB…</span>
+        <span style="flex: 1"></span>
+        <button class="act" onclick="exportJSON()">Export JSON</button>
+        <button
+          class="act"
+          onclick="document.getElementById('importFile').click()"
+        >
+          Import JSON
+        </button>
+        <button class="act danger" onclick="resetToSeed()">Reset</button>
+        <input
+          type="file"
+          id="importFile"
+          accept=".json"
+          onchange="importJSON(event)"
+        />
+      </div>
+
+      <!-- stats row -->
       <div class="stats-row" id="statsRow"></div>
 
       <div class="lbl">Class Roster</div>
@@ -476,6 +536,10 @@
     </div>
 
     <script>
+      const DB_NAME = "grade-tracker";
+      const DB_VERSION = 1;
+      const STORE = "students";
+
       const SUBJECTS = [
         { name: "Mathematics", credits: 4 },
         { name: "Physics", credits: 4 },
@@ -488,6 +552,81 @@
         { name: "Statistics", credits: 3 },
         { name: "Literature", credits: 2 },
       ];
+
+      const SEED = [
+        ["S001", "Alice Chen", 3, [88, 92, 79, 85, 95, 70, 82, 88, 91, 76]],
+        ["S002", "Bob Patel", 2, [72, 68, 75, 80, 70, 65, 71, 74, 69, 77]],
+        ["S003", "Carol Smith", 4, [55, 60, 58, 91, 62, 94, 61, 70, 65, 95]],
+        ["S004", "David Kim", 1, [45, 82, 90, 78, 88, 55, 0, 72, 84, 68]],
+        ["S005", "Eva Rodriguez", 3, [83, 87, 80, 88, 85, 79, 84, 86, 82, 81]],
+        ["S006", "Frank Johnson", 2, [38, 42, 35, 50, 40, 55, 45, 38, 41, 48]],
+        ["S007", "Grace Lee", 4, [96, 94, 91, 98, 99, 89, 93, 95, 97, 92]],
+        ["S008", "Hiro Tanaka", 1, [76, 80, 74, 77, 83, 69, 78, 75, 81, 72]],
+      ];
+
+      let _db = null;
+
+      function openDB() {
+        return new Promise((resolve, reject) => {
+          const req = indexedDB.open(DB_NAME, DB_VERSION);
+          req.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains(STORE)) {
+              db.createObjectStore(STORE, { keyPath: "id" });
+            }
+          };
+          req.onsuccess = (e) => {
+            _db = e.target.result;
+            resolve(_db);
+          };
+          req.onerror = (e) => reject(e.target.error);
+        });
+      }
+
+      function dbSaveAll(list) {
+        return new Promise((resolve, reject) => {
+          setDbStatus("busy", "saving…");
+          const tx = _db.transaction(STORE, "readwrite");
+          const store = tx.objectStore(STORE);
+          store.clear();
+          for (const s of list) store.put(s);
+          tx.oncomplete = () => {
+            setDbStatus("ok", `IndexedDB · ${list.length} records`);
+            resolve();
+          };
+          tx.onerror = (e) => {
+            setDbStatus("err", "write error");
+            reject(e.target.error);
+          };
+        });
+      }
+
+      function dbLoadAll() {
+        return new Promise((resolve, reject) => {
+          const tx = _db.transaction(STORE, "readonly");
+          const store = tx.objectStore(STORE);
+          const req = store.getAll();
+          req.onsuccess = (e) => resolve(e.target.result);
+          req.onerror = (e) => reject(e.target.error);
+        });
+      }
+
+      function dbClearAll() {
+        return new Promise((resolve, reject) => {
+          const tx = _db.transaction(STORE, "readwrite");
+          const store = tx.objectStore(STORE);
+          const req = store.clear();
+          req.onsuccess = () => resolve();
+          req.onerror = (e) => reject(e.target.error);
+        });
+      }
+
+      function setDbStatus(state, msg) {
+        const dot = document.getElementById("dbDot");
+        const lbl = document.getElementById("dbStatus");
+        dot.className = "db-dot " + state;
+        lbl.textContent = msg;
+      }
 
       function makeStudent(id, name, year, gradeRows) {
         const subjects = SUBJECTS.map((s, i) => ({
@@ -565,73 +704,33 @@
         );
       }
 
-      function earnedCredits(student) {
-        return student.subjects
-          .filter((s) => s.scores.length && avg(s.scores) >= 40)
-          .reduce((a, s) => a + s.credits, 0);
+      function earnedCredits(s) {
+        return s.subjects
+          .filter((x) => x.scores.length && avg(x.scores) >= 40)
+          .reduce((a, x) => a + x.credits, 0);
       }
-      function totalCredits(student) {
-        return student.subjects
-          .filter((s) => s.scores.length)
-          .reduce((a, s) => a + s.credits, 0);
+      function totalCredits(s) {
+        return s.subjects
+          .filter((x) => x.scores.length)
+          .reduce((a, x) => a + x.credits, 0);
       }
 
-      let students = [
-        makeStudent(
-          "S001",
-          "Alice Chen",
-          3,
-          [88, 92, 79, 85, 95, 70, 82, 88, 91, 76],
-        ),
-        makeStudent(
-          "S002",
-          "Bob Patel",
-          2,
-          [72, 68, 75, 80, 70, 65, 71, 74, 69, 77],
-        ),
-        makeStudent(
-          "S003",
-          "Carol Smith",
-          4,
-          [55, 60, 58, 91, 62, 94, 61, 70, 65, 95],
-        ),
-        makeStudent(
-          "S004",
-          "David Kim",
-          1,
-          [45, 82, 90, 78, 88, 55, 0, 72, 84, 68],
-        ),
-        makeStudent(
-          "S005",
-          "Eva Rodriguez",
-          3,
-          [83, 87, 80, 88, 85, 79, 84, 86, 82, 81],
-        ),
-        makeStudent(
-          "S006",
-          "Frank Johnson",
-          2,
-          [38, 42, 35, 50, 40, 55, 45, 38, 41, 48],
-        ),
-        makeStudent(
-          "S007",
-          "Grace Lee",
-          4,
-          [96, 94, 91, 98, 99, 89, 93, 95, 97, 92],
-        ),
-        makeStudent(
-          "S008",
-          "Hiro Tanaka",
-          1,
-          [76, 80, 74, 77, 83, 69, 78, 75, 81, 72],
-        ),
-      ];
-
+      let students = [];
       let selectedId = null;
 
+      async function mutate(fn) {
+        fn();
+        await dbSaveAll(students);
+        render();
+      }
+
       function renderStats() {
+        if (!students.length) {
+          document.getElementById("statsRow").innerHTML = "";
+          return;
+        }
         const gpas = students.map(weightedGPA);
-        const avg_ = gpas.reduce((a, b) => a + b, 0) / gpas.length;
+        const avgGpa = gpas.reduce((a, b) => a + b, 0) / gpas.length;
         const honors = students.filter(
           (s) => standing(weightedGPA(s)) === "HONORS",
         ).length;
@@ -643,7 +742,7 @@
         );
         document.getElementById("statsRow").innerHTML = [
           { val: students.length, lbl: "Students" },
-          { val: avg_.toFixed(1) + "%", lbl: "Class Avg GPA" },
+          { val: avgGpa.toFixed(1) + "%", lbl: "Class Avg GPA" },
           { val: honors, lbl: "Honor Roll" },
           { val: prob, lbl: "Probation" },
           { val: top.name.split(" ")[0], lbl: "Top Student" },
@@ -667,14 +766,12 @@
             (a, b) => a.year - b.year || weightedGPA(b) - weightedGPA(a),
           );
 
-        const body = document.getElementById("rosterBody");
-        body.innerHTML = list
+        document.getElementById("rosterBody").innerHTML = list
           .map((s, i) => {
-            const gpa = weightedGPA(s);
-            const col = gpaColor(gpa);
-            const st = standing(gpa);
-            const sel = s.id === selectedId;
-            return `<tr class="${sel ? "sel" : ""}" onclick="selectStudent('${s.id}')" style="cursor:pointer">
+            const gpa = weightedGPA(s),
+              col = gpaColor(gpa),
+              st = standing(gpa);
+            return `<tr class="${s.id === selectedId ? "sel" : ""}" onclick="selectStudent('${s.id}')" style="cursor:pointer">
       <td style="color:var(--mu)">${i + 1}</td>
       <td style="font-weight:700;color:#e6edf3">${s.name}</td>
       <td style="color:var(--mu)">${s.id}</td>
@@ -700,10 +797,10 @@
           detail.style.display = "none";
           return;
         }
-        const gpa = weightedGPA(s);
-        const col = gpaColor(gpa);
-        const smpl = simpleAvg(s);
-        const diff = gpa - smpl;
+        const gpa = weightedGPA(s),
+          col = gpaColor(gpa);
+        const smpl = simpleAvg(s),
+          diff = gpa - smpl;
 
         detail.style.display = "block";
         detail.innerHTML = `
@@ -725,14 +822,14 @@
     </div>
     <div class="subj-grid">${s.subjects
       .map((sub) => {
-        const a = avg(sub.scores);
-        const c = gpaColor(a);
-        const hasSc = sub.scores.length > 0;
+        const a = avg(sub.scores),
+          c = gpaColor(a),
+          has = sub.scores.length > 0;
         return `<div class="subj-card">
         <div class="subj-name">${sub.name} <span style="color:var(--mu)">${sub.credits}cr</span></div>
-        <div class="subj-avg" style="color:${hasSc ? c : "var(--mu)"}">${hasSc ? a.toFixed(1) + "%" : "—"}</div>
-        <div class="subj-meta">${hasSc ? letterGrade(a) + " · " + sub.credits + "cr weight" : ""}</div>
-        ${hasSc ? `<div class="bar-track"><div class="bar-fill" style="width:${a}%;background:${c}"></div></div>` : ""}
+        <div class="subj-avg" style="color:${has ? c : "var(--mu)"}">${has ? a.toFixed(1) + "%" : "—"}</div>
+        <div class="subj-meta">${has ? letterGrade(a) + " · scores: " + sub.scores.join(", ") : ""}</div>
+        ${has ? `<div class="bar-track"><div class="bar-fill" style="width:${a}%;background:${c}"></div></div>` : ""}
       </div>`;
       })
       .join("")}</div>
@@ -749,38 +846,117 @@
         render();
       }
 
-      function addGrade(id) {
-        const s = students.find((x) => x.id === id);
-        const subj = document.getElementById("gSubj").value;
+      async function addGrade(id) {
         const score = parseFloat(document.getElementById("gScore").value);
+        const subj = document.getElementById("gSubj").value;
         if (isNaN(score) || score < 0 || score > 100) {
           alert("Score must be 0–100.");
           return;
         }
-        const sub = s.subjects.find((x) => x.name === subj);
-        sub.scores.push(score);
-        render();
+        await mutate(() => {
+          const s = students.find((x) => x.id === id);
+          const sub = s.subjects.find((x) => x.name === subj);
+          sub.scores.push(score);
+        });
       }
 
-      function removeStudent(id) {
-        if (!confirm("Remove this student?")) return;
-        students = students.filter((s) => s.id !== id);
-        selectedId = null;
-        render();
+      async function removeStudent(id) {
+        if (!confirm("Remove this student from IndexedDB?")) return;
+        await mutate(() => {
+          students = students.filter((s) => s.id !== id);
+          selectedId = null;
+        });
       }
 
-      function openAddStudent() {
+      async function openAddStudent() {
         const name = prompt("Student name:");
         if (!name) return;
         const year = parseInt(
-          prompt("Year (1=Freshman, 2=Sophomore, 3=Junior, 4=Senior):") || "1",
+          prompt("Year (1=Freshman 2=Sophomore 3=Junior 4=Senior):") || "1",
         );
-        const id = "S" + String(students.length + 1).padStart(3, "0");
-        students.push(makeStudent(id, name.trim(), year, []));
-        render();
+        const id = "S" + String(Date.now()).slice(-4);
+        await mutate(() =>
+          students.push(
+            makeStudent(id, name.trim(), isNaN(year) ? 1 : year, []),
+          ),
+        );
       }
 
-      render();
+      function exportJSON() {
+        const blob = new Blob([JSON.stringify(students, null, 2)], {
+          type: "application/json",
+        });
+        const a = Object.assign(document.createElement("a"), {
+          href: URL.createObjectURL(blob),
+          download: "grade-tracker.json",
+        });
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      function importJSON(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          try {
+            const parsed = JSON.parse(ev.target.result);
+            if (!Array.isArray(parsed))
+              throw new Error("Expected array at root.");
+            for (const s of parsed) {
+              if (!s.id || !s.name || !Array.isArray(s.subjects))
+                throw new Error(`Invalid student record: ${JSON.stringify(s)}`);
+            }
+            await mutate(() => {
+              students = parsed;
+              selectedId = null;
+            });
+            setDbStatus("ok", `IndexedDB · imported ${parsed.length} records`);
+          } catch (err) {
+            alert("Import failed: " + err.message);
+            setDbStatus("err", "import error");
+          }
+        };
+        reader.readAsText(file);
+        e.target.value = "";
+      }
+
+      async function resetToSeed() {
+        if (!confirm("Reset to seed data? All changes will be lost.")) return;
+        await mutate(() => {
+          students = SEED.map(([id, name, year, grades]) =>
+            makeStudent(id, name, year, grades),
+          );
+          selectedId = null;
+        });
+        setDbStatus(
+          "ok",
+          `IndexedDB · reset to ${students.length} seed records`,
+        );
+      }
+
+      (async () => {
+        try {
+          await openDB();
+          const stored = await dbLoadAll();
+          if (stored.length) {
+            students = stored;
+            setDbStatus("ok", `IndexedDB · loaded ${stored.length} records`);
+          } else {
+            students = SEED.map(([id, name, year, grades]) =>
+              makeStudent(id, name, year, grades),
+            );
+            await dbSaveAll(students);
+            setDbStatus("ok", `IndexedDB · seeded ${students.length} records`);
+          }
+        } catch (err) {
+          setDbStatus("err", "IndexedDB unavailable — data will not persist");
+          students = SEED.map(([id, name, year, grades]) =>
+            makeStudent(id, name, year, grades),
+          );
+        }
+        render();
+      })();
     </script>
   </body>
 </html>
